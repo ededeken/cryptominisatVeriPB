@@ -1,0 +1,41 @@
+ver 1.2.8 -- 29/10/2009
+* Better printing of statistics
+
+ver 1.2.7 -- 29/10/2009
+* Learnt clause distribution statistics both in
+ - numerical form
+ - graphical form
+
+ver 1.2.6 -- 24/10/2009
+* Corrected unitialised maxRestarts
+
+ver 1.2.5 -- 24/10/2009
+* Maximum restarts can be configured
+* Better verbose debug printing
+
+ver 1.2.4 -- 22/10/2009
+* CryptoMiniSat is printed as the first line of the program
+  (instead of "This is MiniSat 2.0 beta")
+
+ver 1.2.3 -- 22/10/2009
+* better README file
+* better use of the automake autoconf toolchain
+
+ver 1.2.2 -- 22/10/2009
+* phase saving added (thank you, glucose solver team)
+* better printing of statistics
+* better explanation of statistics
+* accept 'v' and 'var', 'g' and 'group'
+* better parsing of 'v','var' and 'g','group'
+* don't allow too long group and variable names
+* branch length distribution added
+* better Makefile.cvs
+* cmake option added
+* updated INSTALL instructions
+* '-march=native' is default when using cmake
+
+ver 1.1 -- 29/04/2009
+* Renamed to CryptoMiniSat
+
+ver 1.0 -- 15/04/2009
+* Some updated statistics! Now average rank of guessed var is shown

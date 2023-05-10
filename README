@@ -1,0 +1,21 @@
+--- Requirements ---
+A recent distribution of ubuntu
+Zlib
+Cmake
+make
+
+--- Installing ---
+In the cryptominisat root directory
+1. Create a build directory 			'mkdir build'
+2. Change working directory to build 	'cd build'
+3. Run cmake 							'cmake ..'
+4. Build with make 						'> make'
+5. Run cryptominisat using 				'./cryptominisat CNF-FILE'
+
+--- Usage ---
+Run cryptominisat with a cnf-file. We provide some files to test on in the 'Tests' directory. 
+Running the file will create 2 new files in the current working directory. 
+Input cnf files can be either standard cnf files, or cnf files containing xor-clauses.
+- "cryptominisat_proof_log_final.cnf" will contain the veriPB proof.
+- "cryptominisat_cnf_log_final.cnf" will contain the cnf file on which the proof has to be verified.
+Additional information concerning usage can be found in the original readme file which is included under the name ORIG_README

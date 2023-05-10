@@ -1,0 +1,800 @@
+diff -rupN cryptominisatm/Solver/Main.C cryptominisat/Solver/Main.C
+--- cryptominisatm/Solver/Main.C	2023-01-08 14:02:38.183724100 +0100
++++ cryptominisat/Solver/Main.C	2023-01-08 14:17:22.813284600 +0100
+@@ -240,6 +240,7 @@ static void parse_DIMACS_main(B& in, Sol
+         case 'p':
+             if (match(in, "p cnf")) {
+                 int vars    = parseInt(in);
++                S.orig_nvars = vars;
+                 int clauses = parseInt(in);
+                 printf("|  Number of variables:  %-12d                                         |\n", vars);
+                 printf("|  Number of clauses:    %-12d                                         |\n", clauses);
+@@ -294,8 +295,9 @@ static void parse_DIMACS_main(B& in, Sol
+ 
+             if (xor_clause)
+                 S.addXorClause(lits, false, group, group_name);
+-            else
++            else {
+                 S.addClause(lits, group, group_name);
++			}
+             break;
+         }
+     }
+@@ -376,6 +378,40 @@ const char* hasPrefix(const char* str, c
+         return NULL;
+ }
+ 
++void finalize_output(Solver &S) {
++	// CNF file
++    char ch;
++    FILE* real_cnf_output = fopen("cryptominisat_cnf_log_final.cnf", "w");
++    fclose(S.cnf_output);
++    S.cnf_output = fopen("cryptominisat_cnf_log.cnf", "r");
++    
++    fprintf(real_cnf_output, "p cnf %d %d\n", S.orig_nvars, S.og_constraint_counter);
++    while((ch = fgetc(S.cnf_output)) != EOF) {
++        fputc(ch, real_cnf_output);
++    }   
++    fclose(real_cnf_output);
++    // Proof file
++    FILE* real_proof_output = fopen("cryptominisat_proof_log_final.proof", "w");
++	fclose(S.output);
++    S.output = fopen("cryptominisat_proof_log.proof", "r");
++
++    fprintf(real_proof_output, "pseudo-Boolean proof version 1.1\n");
++    fprintf(real_proof_output, "f %d ;\n", S.og_constraint_counter);
++	ch = fgetc(S.output);
++	fflush(S.output);
++    while(!feof(S.output)) {
++        fputc(ch, real_proof_output);
++		ch = fgetc(S.output);
++    }
++    fflush(real_proof_output);
++    fclose(real_proof_output);
++
++    fclose(S.output);
++    fclose(S.cnf_output);
++
++    remove("cryptominisat_cnf_log.cnf");
++    remove("cryptominisat_proof_log.proof");
++}
+ 
+ int main(int argc, char** argv)
+ {
+@@ -383,7 +419,6 @@ int main(int argc, char** argv)
+     S.verbosity = 1;
+     bool permutateClauses = false;
+ 
+-
+     int         i, j;
+     const char* value;
+     for (i = j = 0; i < argc; i++) {
+@@ -479,7 +514,6 @@ int main(int argc, char** argv)
+ 
+     solver = &S;
+     signal(SIGINT,SIGINT_handler);
+-    //signal(SIGHUP,SIGINT_handler);
+ 
+     if (argc == 1)
+         printf("Reading from standard input... Use '-h' or '--help' for help.\n");
+@@ -493,25 +527,35 @@ int main(int argc, char** argv)
+         printf("|                                                                             |\n");
+     }
+ 
+-    S.startClauseAdding();
++	S.startClauseAdding();
+     parse_DIMACS(in, S);
+     if (permutateClauses) S.permutateClauses();
+     gzclose(in);
+-    FILE* res = (argc >= 3) ? fopen(argv[2], "wb") : NULL;
+ 
+     double parse_time = cpuTime() - cpu_time;
+     if (S.verbosity >= 1) printf("|  Parsing time:         %-12.2f s                                       |\n", parse_time);
+-
++	
+     if (S.simplify() != l_Undef) {
+         S.endFirstSimplify();
+         printf("Solved by unit propagation\n");
+-        if (res != NULL) fprintf(res, "UNSAT\n"), fclose(res);
++		if (S.output != NULL){
++                fprintf(S.output, "rup >= 1 ;\n"); 
++	            S.constraint_pointer++;
++                fprintf(S.output, "c %d", S.constraint_pointer);
++            }
+         printf("UNSATISFIABLE\n");
++
++        finalize_output(S);
++
+         exit(20);
++        
+     }
+     S.endFirstSimplify();
+ 
+     lbool ret = S.solve();
++
++    finalize_output(S);
++
+     if (S.verbosity >= 1) printStats(S);
+     printf("\n");
+     if (ret == l_Undef) {
+@@ -523,21 +567,21 @@ int main(int argc, char** argv)
+     } else {
+         assert(false);
+     }
+-    if (res != NULL) {
++    if (S.output != NULL) {
+         if (ret == l_True) {
+-            fprintf(res, "SAT\n");
+             for (int i = 0; i < S.nVars(); i++)
+                 if (S.model[i] != l_Undef)
+-                    fprintf(res, "%s%s%d", (i==0)?"":" ", (S.model[i]==l_True)?"":"-", i+1);
+-            fprintf(res, " 0\n");
+-        } else if (ret == l_False) {
+-            fprintf(res, "UNSAT\n");
++					fprintf(S.output, "%s%s%d", (i==0)?"":" ", (S.model[i]==l_True)?"":"-", i+1);
++			fprintf(S.output, " 0\n");
++		} else if (ret == l_False){
++			fprintf(S.output, "rup >= 1 ;\n"); 
++			S.constraint_pointer++;
++			fprintf(S.output, "c %d", S.constraint_pointer);
+         } else if (ret == l_Undef) {
+-            fprintf(res, "Unknown\n");
++            fprintf(S.output, "INDET\n");           
+         } else {
+             assert(false);
+         }
+-        fclose(res);
+     }
+ 
+ #ifdef NDEBUG
+diff -rupN cryptominisatm/Solver/Solver.C cryptominisat/Solver/Solver.C
+--- cryptominisatm/Solver/Solver.C	2023-01-08 14:02:38.184726200 +0100
++++ cryptominisat/Solver/Solver.C	2023-01-08 14:21:13.810296900 +0100
+@@ -104,6 +104,38 @@ Var Solver::newVar(bool sign, bool dvar)
+     return v;
+ }
+ 
++void Solver::print_clause(FILE* f, vec<Lit>& pst) {
++    for (int i=0; i < pst.size(); i++) {
++        if (pst[i].sign()==1) 
++            fprintf(f, "-%d ", pst[i].var()+1);
++        else 
++            fprintf(f, "%d ", pst[i].var()+1);
++    }
++    fprintf(f, "0 \n");
++}
++
++void Solver::transform_xor_clause(vec<Lit>& oc, vec<Lit>& transformed) {
++    bool xor_inverted = false;
++    for (int i=0; i<oc.size(); i++) {
++        if (value(oc[i]) == l_True) {
++            xor_inverted = !xor_inverted;
++        }
++    }
++    for (int i=0; i<oc.size(); i++) {
++        if (value(oc[i]) == l_False) { // False literals are included as is
++            transformed.push(oc[i]);
++        } else if (value(oc[i]) == l_True) { // True literals are included in negated form
++            transformed.push(~oc[i]);
++        } else {
++            if(!xor_inverted) { // Uneven count of true literals
++                transformed.push(oc[i]);
++            } else {
++                transformed.push(~oc[i]);
++            }
++        }
++    }
++}
++
+ bool Solver::addXorClause(vec<Lit>& ps, bool xor_clause_inverted, const uint group, const char* group_name)
+ {
+     assert(decisionLevel() == 0);
+@@ -116,40 +148,88 @@ bool Solver::addXorClause(vec<Lit>& ps,
+     // Check if clause is satisfied and remove false/duplicate literals:
+     sort(ps);
+     Lit p;
+-    int i, j;
++    int i, j, flag = 0;
++
++    // VeriPB
++    vec<Lit> oc;
++    oc.clear();
++
++    for (i = j = 0, p = lit_Undef; i < ps.size(); i++) {
++		while (ps[i].var() >= nVars()) newVar();
++        oc.push(ps[i]);
++        if (value(ps[i]) == l_True || ps[i] == ~p || value(ps[i]) == l_False)
++            flag = 1;
++    }
++    // END VeriPB
++
+     for (i = j = 0, p = lit_Undef; i < ps.size(); i++) {
+-        while (ps[i].var() >= nVars()) newVar();
+         xor_clause_inverted ^= ps[i].sign();
+         ps[i] ^= ps[i].sign();
+ 
+-        if (ps[i] == p) {
+-            //added, but easily removed
++        if (ps[i] == p) { 
+             j--;
+             p = lit_Undef;
+             if (!assigns[ps[i].var()].isUndef())
+                 xor_clause_inverted ^= assigns[ps[i].var()].getBool();
+-        } else if (value(ps[i]) == l_Undef) //just add
++        } else if (value(ps[i]) == l_Undef) 
+             ps[j++] = p = ps[i];
+-        else xor_clause_inverted ^= (value(ps[i]) == l_True); //modify xor_clause_inverted instead of adding
++        else xor_clause_inverted ^= (value(ps[i]) == l_True); 
+     }
+     ps.shrink(i - j);
+ 
+     if (ps.size() == 0) {
++        
+         if (xor_clause_inverted)
+             return true;
+ 
+         if (dynamic_behaviour_analysis) logger.empty_clause(group);
++		// VeriPB
++        constraint_pointer++; 
++        og_constraint_counter++;
++        if (output != NULL) {
++            vec<Lit> pst;
++            transform_xor_clause(oc, pst);
++            print_clause(cnf_output, pst);
++	    }
++		// END VeriPB
+         return ok = false;
+     } else if (ps.size() == 1) {
++		// VeriPB
++		constraint_pointer++; 
++        og_constraint_counter++;
++		vec<Lit> pst;
++		transform_xor_clause(oc, pst);
++		print_clause(cnf_output, pst);
++        if (flag && (output != NULL)) {
++
++            fprintf(output, "rup ");
++            if (xor_clause_inverted) 
++                fprintf(output, "1 ~x%d ", ps[0].var()+1);
++            else 
++                fprintf(output, "1 x%d ", ps[0].var()+1);
++            
++            fprintf(output, " >= 1 ;\n");
++            constraint_pointer++;
++
++            fprintf(output, "del find ");
++            for (i = j = 0, p = lit_Undef; i < pst.size(); i++){
++                if (pst[i].sign()==1) fprintf(output, "1 ~x%d ", pst[i].var()+1);
++                else fprintf(output, "1 x%d ", pst[i].var()+1);
++            }
++            fprintf(output, ">= 1 ;\n");
++        }
++		// END VeriPB
++
+         assert(value(ps[0]) == l_Undef);
+         uncheckedEnqueue( (xor_clause_inverted) ? ~ps[0] : ps[0]);
+         if (dynamic_behaviour_analysis)
+             logger.propagation((xor_clause_inverted) ? ~ps[0] : ps[0], Logger::addclause_type, group);
+         return ok = (propagate() == NULL);
+     } else {
++		
+         learnt_clause_group = std::max(group+1, learnt_clause_group);
+ 
+-        XorClause* c = XorClause_new(ps, xor_clause_inverted, group);
++        XorClause* c = XorClause_new(ps, oc, xor_clause_inverted, group, false);
+ 
+         xorclauses.push(c);
+         attachClause(*c);
+@@ -162,26 +242,67 @@ bool Solver::addClause(vec<Lit>& ps, con
+ {
+     assert(decisionLevel() == 0);
+ 
++
+     if (dynamic_behaviour_analysis)
+         logger.set_group_name(group, group_name);
+ 
+     if (!ok)
+         return false;
+ 
++    constraint_pointer++;
++    og_constraint_counter++;
++
+     // Check if clause is satisfied and remove false/duplicate literals:
+     sort(ps);
+     Lit p;
+-    int i, j;
++    int i, j, flag = 0;
++	
++	// veriPB
++    vec<Lit>    oc;
++    oc.clear();
++
++    for (i = j = 0, p = lit_Undef; i < ps.size(); i++) {
++		while (ps[i].var() >= nVars()) newVar();
++        oc.push(ps[i]);
++        if (value(ps[i]) == l_True || ps[i] == ~p || value(ps[i]) == l_False)
++            flag = 1;
++    }
++    // END veriPB
++
+     for (i = j = 0, p = lit_Undef; i < ps.size(); i++) {
+-        while (ps[i].var() >= nVars()) newVar();
+ 
+-        if (value(ps[i]) == l_True || ps[i] == ~p)
++        if (value(ps[i]) == l_True || ps[i] == ~p) {
++            constraint_pointer--;
++            og_constraint_counter--;
+             return true;
+-        else if (value(ps[i]) != l_False && ps[i] != p)
++        } else if (value(ps[i]) != l_False && ps[i] != p)
+             ps[j++] = p = ps[i];
+     }
+     ps.shrink(i - j);
+ 
++    // veriPB patch
++    if (flag && (output != NULL) && ps.size() > 0) {
++        fprintf(output, "rup ");
++        for (i = j = 0, p = lit_Undef; i < ps.size(); i++) {
++            if (ps[i].sign()==1) 
++                fprintf(output, "1 ~x%d ", ps[i].var()+1);
++            else 
++                fprintf(output, "1 x%d ", ps[i].var()+1);
++        }
++        fprintf(output, " >= 1 ;\n");
++        constraint_pointer++;
++
++        fprintf(output, "del find ");
++        for (i = j = 0, p = lit_Undef; i < oc.size(); i++){
++            if (oc[i].sign()==1) fprintf(output, "1 ~x%d ", oc[i].var()+1);
++            else fprintf(output, "1 x%d ", oc[i].var()+1);
++        }
++        fprintf(output, ">= 1 ;\n");
++    }
++    // END veriPB patch
++
++	print_clause(cnf_output, oc);
++
+     if (ps.size() == 0) {
+         if (dynamic_behaviour_analysis) logger.empty_clause(group);
+         return ok = false;
+@@ -194,7 +315,7 @@ bool Solver::addClause(vec<Lit>& ps, con
+     } else {
+         learnt_clause_group = std::max(group+1, learnt_clause_group);
+ 
+-        Clause* c = Clause_new(ps, group);
++        Clause* c = Clause_new(ps, group, false);
+ 
+         clauses.push(c);
+         attachClause(*c);
+@@ -212,6 +333,7 @@ void Solver::attachClause(XorClause& c)
+ 
+     if (c.learnt()) learnts_literals += c.size();
+     else            clauses_literals += c.size();
++
+ }
+ 
+ void Solver::attachClause(Clause& c)
+@@ -249,13 +371,29 @@ void Solver::detachClause(const Clause&
+     else            clauses_literals -= c.size();
+ }
+ 
+-template<class T>
+-void Solver::removeClause(T& c)
++void Solver::removeClause(XorClause& c)
+ {
+     detachClause(c);
+     free(&c);
+ }
+ 
++void Solver::removeClause(Clause& c)
++{
++	// VeriPB
++    if (output != NULL) {
++        fprintf(output, "del find ");
++        for (int i = 0; i < c.size(); i++){
++            if (c[i].sign()==1) 
++                fprintf(output, "1 ~x%d ", c[i].var()+1);
++            else 
++                fprintf(output, "1 x%d ", c[i].var()+1);
++        }
++        fprintf(output, " >= 1 ;\n");
++    }
++	// END VeriPB
++    detachClause(c);
++    free(&c);
++}
+ 
+ bool Solver::satisfied(const Clause& c) const
+ {
+@@ -464,8 +602,8 @@ void Solver::analyze(Clause* confl, vec<
+         for (uint j = (p == lit_Undef) ? 0 : 1; j < c.size(); j++) {
+             const Lit& q = c[j];
+             const uint my_var = q.var();
+-
+             if (!seen[my_var] && level[my_var] > 0) {
++
+                 if (!useRealUnknowns || (my_var < realUnknowns.size() && realUnknowns[my_var]))
+                     varBumpActivity(my_var);
+                 seen[my_var] = 1;
+@@ -478,14 +616,13 @@ void Solver::analyze(Clause* confl, vec<
+                 }
+             }
+         }
+-
+         // Select next clause to look at:
+-        while (!seen[trail[index--].var()]);
++        while (!seen[trail[index--].var()]) {};
+         p     = trail[index+1];
+         confl = reason[p.var()];
+         seen[p.var()] = 0;
+         pathC--;
+-
++		
+     } while (pathC > 0);
+     out_learnt[0] = ~p;
+ 
+@@ -687,6 +824,21 @@ Clause* Solver::propagate(const bool xor
+                     while (i < end)
+                         *j++ = *i++;
+                 } else {
++                    // veriPB
++                    if(decisionLevel() == 0){
++                        vec<Lit> c;
++                        c.push(first);
++                        fprintf(output, "rup ");        
++                        for (int i = 0; i < c.size(); i++){
++                            if (c[i].sign()==1)
++                                fprintf(output, "1 ~x%d ", c[i].var()+1);
++                            else
++                                fprintf(output, "1 x%d ", c[i].var()+1);
++                        }
++                        fprintf(output, " >= 1 ;\n");
++                        constraint_pointer++;
++                    }
++                    // END veriPB
+                     uncheckedEnqueue(first, &c);
+                     if (dynamic_behaviour_analysis)
+                         logger.propagation(first,Logger::simple_propagation_type,c.group);
+@@ -711,8 +863,10 @@ FoundWatch:
+ 
+ Clause* Solver::propagate_xors(const Lit& p)
+ {
++    // IDEM when propagating, generate a clause put in  cnf file 
++    // + Keep reference to original clause (in XOR clause)
+     #ifdef VERBOSE_DEBUG_XOR
+-    cout << "Xor-Propagating variable " <<  p.var()+1 << endl;
++    std::cout << "Xor-Propagating variable " <<  p.var()+1 << std::endl;
+     #endif
+     
+     Clause* confl = NULL;
+@@ -720,6 +874,7 @@ Clause* Solver::propagate_xors(const Lit
+     vec<XorClause*>&  ws  = xorwatches[p.var()];
+     XorClause         **i, **j, **end;
+     for (i = j = ws.getData(), end = i + ws.size();  i != end;) {
++
+         XorClause& c = **i++;
+ 
+         // Make sure the false literal is data[1]:
+@@ -731,9 +886,9 @@ Clause* Solver::propagate_xors(const Lit
+         assert(c[1].var() == p.var());
+         
+         #ifdef VERBOSE_DEBUG_XOR
+-        cout << "--> xor thing -- " << endl;
++        std::cout << "--> xor thing -- " << std::endl;
+         printClause(c);
+-        cout << endl;
++        std::cout << std::endl;
+         #endif
+         bool final = c.xor_clause_inverted();
+         for (int k = 0, size = c.size(); k < size; k++ ) {
+@@ -743,7 +898,7 @@ Clause* Solver::propagate_xors(const Lit
+                 c[1] = c[k];
+                 c[k] = tmp;
+                 #ifdef VERBOSE_DEBUG_XOR
+-                cout << "new watch set" << endl << endl;
++                std::cout << "new watch set" << std::endl << std::endl;
+                 #endif
+                 xorwatches[c[1].var()].push(&c);
+                 goto FoundWatch;
+@@ -759,21 +914,39 @@ Clause* Solver::propagate_xors(const Lit
+             *j++ = &c;
+ 
+             #ifdef VERBOSE_DEBUG_XOR
+-            cout << "final: " << std::boolalpha << final << " - ";
++            std::cout << "final: " << std::boolalpha << final << " - ";
+             #endif
+             if (assigns[c[0].var()].isUndef()) {
+                 c[0] = c[0].unsign()^final;
+                 
+                 #ifdef VERBOSE_DEBUG_XOR
+-                cout << "propagating ";
++                std::cout << "propagating ";
+                 printLit(c[0]);
+-                cout << endl;
+-                cout << "propagation clause -- ";
++                std::cout << std::endl;
++                std::cout << "propagation clause -- ";
+                 printClause(*(Clause*)&c);
+-                cout << endl << endl;
++                std::cout << std::endl << std::endl;
+                 #endif
++				
++				//VeriPB Start
++                vec<Lit> pst;
++				Lit* oc = c.getOc();
++				vec<Lit> ocs;
++				int size =  c.ocsize();
++				int i;
++				for (i = 0; i < size;  i++) {
++					ocs.push(oc[i]);
++				}
++                transform_xor_clause(ocs, pst);
++                print_clause(cnf_output, pst);
++				constraint_pointer++;
++                og_constraint_counter++;
++				//VeriPB End
++    
++                // Clause is still unit (assignment happens in uncheckedEnqueue)
+                 
+                 uncheckedEnqueue(c[0], (Clause*)&c);
++				
+                 if (dynamic_behaviour_analysis)
+                     logger.propagation(c[0], Logger::simple_propagation_type, c.group);
+             } else if (!final) {
+@@ -781,10 +954,26 @@ Clause* Solver::propagate_xors(const Lit
+                 #ifdef VERBOSE_DEBUG_XOR
+                 printf("conflict clause -- ");
+                 printClause(*(Clause*)&c);
+-                cout << endl << endl;
++                std::cout << std::endl << std::endl;
+                 #endif
+                 
+                 confl = (Clause*)&c;
++				
++				//VeriPB Start
++                vec<Lit> pst;
++				Lit* oc = c.getOc();
++				vec<Lit> ocs;
++				int size =  c.ocsize();
++				int idx;
++				for (idx = 0; idx < size;  idx++) {
++					ocs.push(oc[idx]);
++				}
++                transform_xor_clause(ocs, pst);
++                print_clause(cnf_output, pst);
++				constraint_pointer++;
++                og_constraint_counter++;
++				//VeriPB End
++				
+                 qhead = trail.size();
+                 // Copy the remaining watches:
+                 while (i < end)
+@@ -1023,6 +1212,9 @@ llbool Solver::new_decision(int& nof_con
+             logger.end(Logger::unsat_model_found);
+             logger.print_general_stats(starts, conflicts, order_heap.size(), nClauses(), clauses_literals, nLearnts(), (double)learnts_literals/nLearnts(), progress_estimate*100);
+         }
++		fprintf(output,"rup >= 1 ;\n"); 
++		constraint_pointer++;
++		fprintf(output, "c %d", constraint_pointer);
+         return l_False;
+     }
+ 
+@@ -1093,11 +1285,16 @@ llbool Solver::handle_conflict(vec<Lit>&
+             logger.end(Logger::unsat_model_found);
+             logger.print_general_stats(starts, conflicts, order_heap.size(), nClauses(), clauses_literals, nLearnts(), (double)learnts_literals/nLearnts(), progress_estimate*100);
+         }
++		fprintf(output,"rup >= 1 ;\n"); 
++        constraint_pointer++;
++        fprintf(output, "c %d", constraint_pointer);        
+         return l_False;
+     }
++	
+     learnt_clause.clear();
+     analyze(confl, learnt_clause, backtrack_level);
+     cancelUntil(backtrack_level);
++	
+     if (dynamic_behaviour_analysis)
+         logger.conflict(Logger::simple_confl_type, backtrack_level, confl->group, learnt_clause);
+     
+@@ -1114,6 +1311,19 @@ llbool Solver::handle_conflict(vec<Lit>&
+         Clause* c = Clause_new(learnt_clause, learnt_clause_group++, true);
+         unitary_learnts.push(c);
+         uncheckedEnqueue(learnt_clause[0]);
++		//Begin VERIPB Patch
++		if (output != NULL) {
++			fprintf(output, "rup ");        
++			for (int i = 0; i < learnt_clause.size(); i++){
++				if (learnt_clause[i].sign()==1)
++					fprintf(output, "1 ~x%d ", learnt_clause[i].var()+1);
++				else
++					fprintf(output, "1 x%d ", learnt_clause[i].var()+1);
++			}
++			fprintf(output, " >= 1 ;\n");
++			constraint_pointer++;
++		}
++		//END VERIPB Patch
+         if (dynamic_behaviour_analysis) {
+             logger.set_group_name(c->group, "unitary learnt clause");
+             logger.propagation(learnt_clause[0], Logger::learnt_unit_clause_type, c->group);
+@@ -1130,7 +1340,19 @@ llbool Solver::handle_conflict(vec<Lit>&
+         attachClause(*c);
+         claBumpActivity(*c);
+         uncheckedEnqueue(learnt_clause[0], c);
+-
++		//Begin VERIPB Patch
++		if (output != NULL) {
++			fprintf(output, "rup ");        
++			for (int i = 0; i < learnt_clause.size(); i++){
++				if (learnt_clause[i].sign()==1)
++					fprintf(output, "1 ~x%d ", learnt_clause[i].var()+1);
++				else
++					fprintf(output, "1 x%d ", learnt_clause[i].var()+1);
++			}
++			fprintf(output, " >= 1 ;\n");
++			constraint_pointer++;
++		}
++		//END VERIPB Patch
+         if (dynamic_behaviour_analysis) {
+             logger.set_group_name(c->group, "learnt clause");
+             logger.propagation(learnt_clause[0], Logger::revert_guess_type, c->group);
+@@ -1164,7 +1386,12 @@ lbool Solver::solve(const vec<Lit>& assu
+     model.clear();
+     conflict.clear();
+ 
+-    if (!ok) return l_False;
++	if (!ok){ 
++		fprintf(output,"rup >= 1 ;\n"); 
++		constraint_pointer++;
++		fprintf(output,"c %d", constraint_pointer); 
++		return l_False;
++	}
+ 
+     assumps.copyTo(assumptions);
+ 
+diff -rupN cryptominisatm/Solver/Solver.h cryptominisat/Solver/Solver.h
+--- cryptominisatm/Solver/Solver.h	2023-01-08 14:02:38.184726200 +0100
++++ cryptominisat/Solver/Solver.h	2023-01-08 14:22:46.678501300 +0100
+@@ -80,7 +80,16 @@ public:
+     int     nClauses   ()      const;       // The current number of original clauses.
+     int     nLearnts   ()      const;       // The current number of learnt clauses.
+     int     nVars      ()      const;       // The current number of variables.
+-
++	
++	// proof logging:
++    FILE* output = fopen("cryptominisat_proof_log.proof", "wb");
++	FILE* cnf_output = fopen("cryptominisat_cnf_log.cnf", "wb");
++    int orig_nvars;
++    int constraint_pointer=0;
++    int og_constraint_counter=0;
++    void transform_xor_clause(vec<Lit>& oc, vec<Lit>& transformed);
++    void print_clause(FILE* f, vec<Lit>& pst);
++	
+     // Extra results: (read-only member variable)
+     //
+     vec<lbool> model;             // If problem is satisfiable, this vector contains the model (if any).
+@@ -217,8 +226,8 @@ protected:
+     void     attachClause     (Clause& c);             // Attach a clause to watcher lists.
+     void     detachClause     (const XorClause& c);
+     void     detachClause     (const Clause& c);       // Detach a clause to watcher lists.
+-    template<class T>
+-    void     removeClause(T& c);                       // Detach and free a clause.
++    void     removeClause(XorClause& c);                       // Detach and free a clause.
++	void     removeClause(Clause& c); 
+     bool     locked           (const Clause& c) const; // Returns TRUE if a clause is a reason for some implication in the current state.
+     bool     satisfied        (const XorClause& c) const; // Returns TRUE if the clause is satisfied in the current state
+     bool     satisfied        (const Clause& c) const; // Returns TRUE if the clause is satisfied in the current state.
+diff -rupN cryptominisatm/Solver/clause.cpp cryptominisat/Solver/clause.cpp
+--- cryptominisatm/Solver/clause.cpp	2023-01-08 14:02:38.186725200 +0100
++++ cryptominisat/Solver/clause.cpp	2023-01-03 16:55:29.256364600 +0100
+@@ -19,14 +19,14 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR
+ 
+ #include "clause.h"
+ 
+-Clause* Clause_new(const vec<Lit>& ps, const uint group, const bool learnt)
++Clause* Clause_new(const vec<Lit>& ps, const uint group, const bool learnt = false)
+ {
+     void* mem = malloc(sizeof(Clause) + sizeof(Lit)*(ps.size()));
+     Clause* real= new (mem) Clause(ps, group, learnt);
+     return real;
+ }
+ 
+-Clause* Clause_new(const vector<Lit>& ps, const uint group, const bool learnt)
++Clause* Clause_new(const vector<Lit>& ps, const uint group, const bool learnt = false)
+ {
+     void* mem = malloc(sizeof(Clause) + sizeof(Lit)*(ps.size()));
+     Clause* real= new (mem) Clause(ps, group, learnt);
+@@ -34,7 +34,7 @@ Clause* Clause_new(const vector<Lit>& ps
+ }
+ 
+ #ifdef USE_GAUSS
+-Clause* Clause_new(const mpz_class& ps, const vec<lbool>& assigns, const vector<uint>& col_to_var_original, const uint group, const bool learnt)
++Clause* Clause_new(const mpz_class& ps, const vec<lbool>& assigns, const vector<uint>& col_to_var_original, const uint group, const bool learnt = false)
+ {
+     void* mem = malloc(sizeof(Clause) + sizeof(Lit)*(ps.size()));
+     Clause* real= new (mem) Clause(ps, assigns, col_to_var_original, group, learnt);
+diff -rupN cryptominisatm/Solver/clause.h cryptominisat/Solver/clause.h
+--- cryptominisatm/Solver/clause.h	2023-01-08 14:02:38.186725200 +0100
++++ cryptominisat/Solver/clause.h	2023-01-08 14:21:48.822501000 +0100
+@@ -46,7 +46,7 @@ public:
+ protected:
+     uint32_t size_etc;
+     float act;
+-    Lit     data[0];
++    Lit     data[20];
+ 
+ public:
+     Clause(const vec<Lit>& ps, const uint _group, const bool learnt) :
+@@ -64,8 +64,8 @@ public:
+     }
+ 
+     // -- use this function instead:
+-    friend Clause* Clause_new(const vec<Lit>& ps, const uint group, const bool learnt = false);
+-    friend Clause* Clause_new(const vector<Lit>& ps, const uint group, const bool learnt = false);
++    friend Clause* Clause_new(const vec<Lit>& ps, const uint group, const bool learnt);
++    friend Clause* Clause_new(const vector<Lit>& ps, const uint group, const bool learnt);
+ 
+     uint         size        ()      const {
+         return size_etc >> 4;
+@@ -114,13 +114,32 @@ public:
+ 
+ class XorClause : public Clause
+ {
++	
++protected:
++	uint32_t oc_size_etc;
++	Lit     oc[20];
++	
+ public:
+     // NOTE: This constructor cannot be used directly (doesn't allocate enough memory).
+-    template<class V>
+-    XorClause(const V& ps, const bool _xor_clause_inverted, const uint _group, const bool learnt) :
++	
++	template<class V>
++	
++	// VeriPB
++	
++    XorClause(const V& ps, const V& ocs, const bool _xor_clause_inverted, const uint _group, const bool learnt) :
+             Clause(ps, _group, learnt) {
++		oc_size_etc = ocs.size();
+         size_etc |= (((uint32_t)_xor_clause_inverted) << 3);
++        for (int i = 0; i < (int) ocs.size(); i++)  {
++			oc[i] = ocs[i];
++		}
++    }
++	
++	uint32_t         ocsize        ()      const {
++        return oc_size_etc;
+     }
++	
++	// END VeriPB
+ 
+     inline bool	 xor_clause_inverted() const {
+         return size_etc & 8;
+@@ -128,6 +147,10 @@ public:
+     inline void	 invert      (bool b) {
+         size_etc ^= (uint32_t)b << 3;
+     }
++	
++	Lit*	 getOc     () {
++        return oc;
++    }
+ 
+     void print() {
+         Clause& c = *this;
+@@ -143,12 +166,13 @@ public:
+ };
+ 
+ template<class V>
+-    XorClause* XorClause_new(const V& ps, const bool xor_clause_inverted, const uint group, const bool learnt = false) {
+-        void* mem = malloc(sizeof(XorClause) + sizeof(Lit)*(ps.size()));
+-        XorClause* real= new (mem) XorClause(ps, xor_clause_inverted, group, learnt);
++    XorClause* XorClause_new(const V& ps, const V& oc, const bool xor_clause_inverted, const uint group, const bool learnt = false) {
++		void* mem = malloc(sizeof(XorClause) + sizeof(Lit)*(ps.size()) + sizeof(Lit)*(oc.size()));
++		XorClause* real= new (mem) XorClause(ps, oc, xor_clause_inverted, group, learnt);
+         return real;
+     }
+ 
++
+ Clause* Clause_new(const vec<Lit>& ps, const uint group, const bool learnt);
+ Clause* Clause_new(const vector<Lit>& ps, const uint group, const bool learnt);
+ 
